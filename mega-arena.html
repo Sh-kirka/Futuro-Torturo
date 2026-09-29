@@ -60,7 +60,7 @@
     box-shadow:0 3px 8px rgba(0,0,0,.1);max-width:220px;white-space:normal;text-align:center;line-height:1.3;}
   .falling-word.pop{transform:translateX(-50%) scale(1.3);opacity:0;transition:transform .35s ease,opacity .35s ease}
   .falling-word.settled{border-color:var(--bad);background:#ffe1e3;color:#a3222c;box-shadow:0 2px 5px rgba(230,57,70,.25)}
-  .falling-word.falling-sentence{max-width:88%;font-size:13.5px;padding:10px 14px}
+  .falling-word.falling-sentence{max-width:82%;font-size:13.5px;padding:10px 14px}
 
   .pinned-sentence{font-size:18px;font-weight:700;text-align:center;margin-bottom:6px;line-height:1.5}
   .blank{color:var(--accent);text-decoration:underline}
@@ -89,6 +89,7 @@
   .modal-card{background:#fff;color:var(--ink);border-radius:20px 20px 0 0;padding:22px 20px 26px;width:100%;max-width:640px;box-shadow:0 -8px 30px rgba(0,0,0,.3)}
   .modal-word{font-size:20px;font-weight:900;color:var(--bad)}
   .modal-topic{font-size:11.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:2px 0 10px}
+  .modal-correct{font-size:14.5px;font-weight:700;color:#1a8a4a;background:#e7f7ee;border-radius:10px;padding:8px 12px;margin:2px 0 8px}
   .modal-expl{font-size:14.5px;line-height:1.5;margin-bottom:8px}
   .modal-trans{font-size:13px;color:var(--muted);font-style:italic;margin-bottom:16px}
   .modal-close{width:100%;padding:14px;border:none;border-radius:12px;background:var(--ink);color:#fff;font-weight:800;font-size:14.5px;cursor:pointer}
@@ -884,35 +885,49 @@ function spawnFalling(opts, item){
   const sky = document.getElementById('sky');
   const skyH = sky.clientHeight || 340;
   const skyW = sky.clientWidth || 320;
-  const maxLen = Math.max(...opts.map(o=>o.length));
-  // стовпчик, якщо це "визначити час" АБО якщо слова/фрази довгі і не влізуть рядком на вузький екран
-  const isLabel = item.type === 'label' || (maxLen > 13) || (opts.length * (maxLen+2) * 8 > skyW);
+  // стовпчик, якщо це "визначити час" АБО якщо сума реальних ширин пігулок (з відступами) не влізе рядком
+  const CHAR_W = 10, PAD_W = 36, GAP_W = 10;
+  const totalRowWidth = opts.reduce((sum,o)=> sum + PAD_W + o.length*CHAR_W, 0) + (opts.length-1)*GAP_W;
+  const isLabel = item.type === 'label' || (totalRowWidth > skyW * 0.92);
   const laneCount = opts.length;
   const duration = FALL_MIN_MS + Math.random()*FALL_JITTER_MS;
+  const HORIZ_OFFSETS = [0, -6, 6, -3, 3]; // % від ширини неба — розкидаємо стовпчик і по боках, там є вільне місце
+  let cumGap = 0;
+  const startOffsets = [];
   opts.forEach((o,i)=>{
     const el = document.createElement('div');
     el.className = 'falling-word' + (isLabel ? ' falling-sentence' : '');
     el.textContent = o;
     if(isLabel){
-      el.style.left = '50%';
+      const hOffset = HORIZ_OFFSETS[i % HORIZ_OFFSETS.length];
+      el.style.left = `calc(50% + ${hOffset}%)`;
       el.style.transform = 'translateX(-50%)';
-      el.style.top = (-46 - i*55)+'px';
+      el.style.top = (-46 - cumGap)+'px';
+      sky.appendChild(el);
+      // відстань до наступної бульбашки рахуємо від РЕАЛЬНОЇ висоти цієї (довгі речення в 2-3 рядки
+      // набагато вищі за фіксовані 55px, тому й наздоганяли одна одну)
+      startOffsets[i] = cumGap;
+      cumGap += (el.offsetHeight || 90) + 26;
     } else {
       const lanePct = (100/(laneCount+1))*(i+1);
       const jitter = (Math.random()*10-5);
       el.style.left = `calc(${lanePct}% + ${jitter}px)`;
       el.style.transform = 'translateX(-50%)';
       el.style.top = '-46px';
+      sky.appendChild(el);
     }
-    sky.appendChild(el);
     G.currentRoundEls.push(el);
 
     function onFallEnd(ev){
       if(ev.propertyName !== 'top') return;
       el.removeEventListener('transitionend', onFallEnd);
-      if(!ACTIVE || G.answered) return;
+      if(!ACTIVE) return;
       if(o === item.correct){
-        resolveMega(false, el, item, true);
+        if(!G.answered) resolveMega(false, el, item, true);
+      } else if(!G.answered && el.parentNode){
+        // невірний варіант долетів донизу і його не тапнули — одразу в купу (як і решту),
+        // а не чекаємо кінця раунду і не даємо йому просто зникнути
+        settleIntoPile(el, item);
       }
     }
     el.addEventListener('transitionend', onFallEnd);
@@ -929,7 +944,7 @@ function spawnFalling(opts, item){
           // для стовпчика: стала швидкість, а не стала тривалість — інакше ті, що стартують
           // вище, "наздоганяють" перших і всі прибувають одночасно, накладаючись одне на одне
           const baseDist = skyH + 6;
-          const dist = isLabel ? (baseDist + i*55) : baseDist;
+          const dist = isLabel ? (baseDist + startOffsets[i]) : baseDist;
           const itemDuration = duration * (dist / baseDist);
           el.style.transition = `top ${itemDuration}ms linear`;
           el.style.top = (skyH-40)+'px';
@@ -975,6 +990,44 @@ function showToast(correct){
   setTimeout(()=>{ if(slot) slot.innerHTML=''; }, NEXT_DELAY_MS);
 }
 
+function settleIntoPile(settleEl, item){
+  if(!settleEl || !settleEl.parentNode || settleEl.classList.contains('settled')) return;
+  const sky = document.getElementById('sky');
+  const pileWrap = document.getElementById('pileWrap');
+  freezeTop(settleEl, sky);
+  const rot = (Math.random()*14-7).toFixed(1);
+  settleEl.classList.add('settled');
+  settleEl.onclick = ()=> openInfoModal(item);
+  requestAnimationFrame(()=>{
+    // FLIP: запам'ятовуємо поточну позицію відносно sky, переносимо у flex-купу,
+    // і плавно анімуємо різницю — так браузер сам розкладає купу без накладань
+    const skyRect = sky.getBoundingClientRect();
+    const beforeRect = settleEl.getBoundingClientRect();
+    const beforeX = beforeRect.left - skyRect.left;
+    const beforeY = beforeRect.top - skyRect.top;
+
+    settleEl.style.transition = 'none';
+    settleEl.style.position = 'static';
+    settleEl.style.left = '';
+    settleEl.style.top = '';
+    settleEl.style.transform = `rotate(${rot}deg)`;
+    pileWrap.appendChild(settleEl);
+
+    const afterRect = settleEl.getBoundingClientRect();
+    const afterX = afterRect.left - skyRect.left;
+    const afterY = afterRect.top - skyRect.top;
+    const dx = beforeX - afterX;
+    const dy = beforeY - afterY;
+
+    settleEl.style.transform = `translate(${dx}px, ${Math.min(dy,0)}px) rotate(${rot}deg)`;
+    void settleEl.offsetHeight;
+    requestAnimationFrame(()=>{
+      settleEl.style.transition = 'transform .32s cubic-bezier(.34,1.56,.64,1)';
+      settleEl.style.transform = `translate(0,0) rotate(${rot}deg)`;
+    });
+  });
+}
+
 function resolveMega(correct, clickedEl, item, timedOut){
   if(!ACTIVE || G.answered) return;
   G.answered = true;
@@ -982,6 +1035,7 @@ function resolveMega(correct, clickedEl, item, timedOut){
   if(correct){
     G.combo++; G.score += 10 + G.combo*2; store.everWrong[item.id] = false;
     G.currentRoundEls.forEach(el=>{
+      if(el.classList.contains('settled')) return; // вже в купі — лишаємо
       if(el.parentNode){
         el.classList.add('pop');
         setTimeout(()=>{ if(el.parentNode) el.remove(); }, 380);
@@ -991,54 +1045,18 @@ function resolveMega(correct, clickedEl, item, timedOut){
     G.combo = 0; G.wrongIds.push(item.id); store.everWrong[item.id] = true;
     G.topicMiss[item.topic] = (G.topicMiss[item.topic]||0) + 1;
 
-    const sky = document.getElementById('sky');
-    const pileWrap = document.getElementById('pileWrap');
-    const skyH = sky.clientHeight || 340;
     let settleEl = clickedEl;
     if(!settleEl){
-      settleEl = G.currentRoundEls.find(el => el.textContent === item.correct) || null;
+      settleEl = G.currentRoundEls.find(el => el.textContent === item.correct && el.parentNode) || null;
     }
     G.currentRoundEls.forEach(el=>{
-      if(el === settleEl) return;
+      if(el === settleEl || el.classList.contains('settled')) return; // вже в купі — лишаємо
       if(el.parentNode){
         el.classList.add('pop');
         setTimeout(()=>{ if(el.parentNode) el.remove(); }, 380);
       }
     });
-    if(settleEl && settleEl.parentNode){
-      freezeTop(settleEl, sky);
-      const rot = (Math.random()*14-7).toFixed(1);
-      settleEl.classList.add('settled');
-      settleEl.onclick = ()=> openInfoModal(item);
-      requestAnimationFrame(()=>{
-        // FLIP: запам'ятовуємо поточну позицію відносно sky, переносимо у flex-купу,
-        // і плавно анімуємо різницю — так браузер сам розкладає купу без накладань
-        const skyRect = sky.getBoundingClientRect();
-        const beforeRect = settleEl.getBoundingClientRect();
-        const beforeX = beforeRect.left - skyRect.left;
-        const beforeY = beforeRect.top - skyRect.top;
-
-        settleEl.style.transition = 'none';
-        settleEl.style.position = 'static';
-        settleEl.style.left = '';
-        settleEl.style.top = '';
-        settleEl.style.transform = `rotate(${rot}deg)`;
-        pileWrap.appendChild(settleEl);
-
-        const afterRect = settleEl.getBoundingClientRect();
-        const afterX = afterRect.left - skyRect.left;
-        const afterY = afterRect.top - skyRect.top;
-        const dx = beforeX - afterX;
-        const dy = beforeY - afterY;
-
-        settleEl.style.transform = `translate(${dx}px, ${Math.min(dy,0)}px) rotate(${rot}deg)`;
-        void settleEl.offsetHeight;
-        requestAnimationFrame(()=>{
-          settleEl.style.transition = 'transform .32s cubic-bezier(.34,1.56,.64,1)';
-          settleEl.style.transform = `translate(0,0) rotate(${rot}deg)`;
-        });
-      });
-    }
+    settleIntoPile(settleEl, item);
   }
 
   saveStore();
@@ -1066,6 +1084,7 @@ function openInfoModal(item){
   root.innerHTML = `
     <div class="modal-card">
       <div class="modal-word">${headline}</div>
+      ${item.type === 'label' ? `<div class="modal-correct">✓ ${item.correct}</div>` : ""}
       <div class="modal-topic">${topicLabel(item.topic)}</div>
       <div class="modal-expl">${itemExpl(item)}</div>
       <div class="modal-trans">«${itemTransl(item)}»</div>
