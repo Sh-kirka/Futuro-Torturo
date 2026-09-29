@@ -54,9 +54,9 @@
   .tag-chip{display:inline-block;background:#eef0ff;color:#3a3a5c;border-radius:999px;padding:4px 11px;font-size:11px;font-weight:800;margin-bottom:10px}
 
   .sky{position:relative;height:340px;background:linear-gradient(#eef2ff,#f8f8fc);border-radius:16px;overflow:hidden;margin-bottom:12px;border:2px solid #ececf3}
-  .pile-wrap{position:absolute;left:0;right:0;bottom:6px;top:6px;display:flex;flex-wrap:wrap-reverse;align-content:flex-start;justify-content:flex-start;gap:6px;padding:0 8px;overflow:visible}
+  .pile-wrap{position:absolute;left:0;right:0;bottom:6px;top:6px;display:flex;flex-wrap:wrap-reverse;align-content:flex-start;justify-content:center;gap:6px;padding:0 8px;overflow:visible}
   .falling-word{position:absolute;top:-46px;padding:10px 16px;border-radius:999px;background:#fff;
-    border:2px solid #d8d8f0;font-weight:800;font-size:15px;cursor:pointer;
+    border:2px solid #d8d8f0;font-weight:800;font-size:15px;cursor:pointer;touch-action:manipulation;
     box-shadow:0 3px 8px rgba(0,0,0,.1);max-width:220px;white-space:normal;text-align:center;line-height:1.3;}
   .falling-word.pop{transform:translateX(-50%) scale(1.3);opacity:0;transition:transform .35s ease,opacity .35s ease}
   .falling-word.settled{border-color:var(--bad);background:#ffe1e3;color:#a3222c;box-shadow:0 2px 5px rgba(230,57,70,.25)}
@@ -86,6 +86,15 @@
   .topic-breakdown .row-link span:last-child{color:var(--bad);font-weight:800}
 
   .modal-backdrop{position:fixed;inset:0;background:rgba(10,10,20,.55);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+  .pile-full-banner{position:fixed;top:calc(64px + env(safe-area-inset-top,0px));left:12px;right:12px;
+    max-width:420px;margin:0 auto;background:#2b1a05;color:#ffe9c2;border:2px solid #ffb84d;
+    border-radius:14px;padding:11px 14px;font-size:12.5px;line-height:1.4;z-index:40;
+    display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 20px rgba(0,0,0,.4)}
+  .pile-full-banner b{font-size:13.5px;color:#ffb84d}
+  .pile-full-actions{display:flex;gap:8px;margin-top:4px}
+  .pile-full-actions button{flex:1;padding:8px 10px;border-radius:10px;border:none;font-weight:800;font-size:13px;cursor:pointer}
+  .pile-full-continue{background:#ffb84d;color:#2b1a05}
+  .pile-full-finish{background:transparent;color:#ffe9c2;border:1.5px solid #6b5230!important}
   .modal-card{background:#fff;color:var(--ink);border-radius:20px 20px 0 0;padding:22px 20px 26px;width:100%;max-width:640px;box-shadow:0 -8px 30px rgba(0,0,0,.3)}
   .modal-word{font-size:20px;font-weight:900;color:var(--bad)}
   .modal-topic{font-size:11.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:2px 0 10px}
@@ -157,6 +166,8 @@ const UI = {
     batchLabel: (n)=>`пачка ${n}`,
     correctionPlaceholder: "як правильно?",
     checkBtn: "Перевірити",
+    pileFullTitle: "Купа заповнена!",
+    pileFullMsg: "Забагато невивчених помилок накопичилось. Переглянь їх (тапни на будь-яку), а тоді обери — продовжити пачку чи завершити.",
   },
   en: {
     appTitle: "Futuro-Torturo",
@@ -177,6 +188,8 @@ const UI = {
     batchLabel: (n)=>`batch ${n}`,
     correctionPlaceholder: "what's correct?",
     checkBtn: "Check",
+    pileFullTitle: "The pile is full!",
+    pileFullMsg: "Too many unreviewed mistakes have piled up. Look through them (tap any), then choose — continue the batch or finish.",
   }
 };
 function t(key, ...args){
@@ -837,6 +850,8 @@ function renderStart(){
 function goStart(){
   ACTIVE = false;
   document.querySelectorAll('.modal-backdrop').forEach(m=>m.remove());
+  const pileFullBanner = document.getElementById('pileFullBanner');
+  if(pileFullBanner) pileFullBanner.remove();
   renderStart();
 }
 
@@ -885,36 +900,49 @@ function spawnFalling(opts, item){
   const sky = document.getElementById('sky');
   const skyH = sky.clientHeight || 340;
   const skyW = sky.clientWidth || 320;
-  // стовпчик, якщо це "визначити час" АБО якщо сума реальних ширин пігулок (з відступами) не влізе рядком
-  const CHAR_W = 10, PAD_W = 36, GAP_W = 10;
-  const totalRowWidth = opts.reduce((sum,o)=> sum + PAD_W + o.length*CHAR_W, 0) + (opts.length-1)*GAP_W;
-  const isLabel = item.type === 'label' || (totalRowWidth > skyW * 0.92);
-  const laneCount = opts.length;
+  const EDGE_MARGIN = 2; // px буфер з кожного боку екрана
+  const GAP_W = 10;
+
+  // спочатку створюємо елементи в рядковому стилі й міряємо їхню РЕАЛЬНУ ширину в пікселях
+  // (а не вгадуємо за кількістю символів) — і вже за цим рішаємо рядок це чи стовпчик
+  const els = opts.map(o=>{
+    const el = document.createElement('div');
+    el.className = 'falling-word';
+    el.textContent = o;
+    el.style.top = '-9999px';
+    el.style.left = '0px';
+    sky.appendChild(el);
+    return el;
+  });
+  const totalRowWidth = els.reduce((sum,el)=> sum + el.offsetWidth, 0) + (els.length-1)*GAP_W;
+  const isLabel = item.type === 'label' || (totalRowWidth > skyW - EDGE_MARGIN*2);
+
   const duration = FALL_MIN_MS + Math.random()*FALL_JITTER_MS;
   const HORIZ_OFFSETS = [0, -6, 6, -3, 3]; // % від ширини неба — розкидаємо стовпчик і по боках, там є вільне місце
   let cumGap = 0;
   const startOffsets = [];
+  // для рядка: позиції рахуємо послідовно від РЕАЛЬНОЇ виміряної ширини кожної пігулки
+  // (а не рівномірним поділом екрана — саме через це сусідні широкі слова могли накладатись,
+  // навіть коли сума ширин загалом влазила)
+  let cumX = Math.max(EDGE_MARGIN, (skyW - totalRowWidth) / 2);
   opts.forEach((o,i)=>{
-    const el = document.createElement('div');
-    el.className = 'falling-word' + (isLabel ? ' falling-sentence' : '');
-    el.textContent = o;
+    const el = els[i];
+    if(isLabel) el.classList.add('falling-sentence');
     if(isLabel){
       const hOffset = HORIZ_OFFSETS[i % HORIZ_OFFSETS.length];
       el.style.left = `calc(50% + ${hOffset}%)`;
       el.style.transform = 'translateX(-50%)';
       el.style.top = (-46 - cumGap)+'px';
-      sky.appendChild(el);
       // відстань до наступної бульбашки рахуємо від РЕАЛЬНОЇ висоти цієї (довгі речення в 2-3 рядки
       // набагато вищі за фіксовані 55px, тому й наздоганяли одна одну)
       startOffsets[i] = cumGap;
       cumGap += (el.offsetHeight || 90) + 26;
     } else {
-      const lanePct = (100/(laneCount+1))*(i+1);
-      const jitter = (Math.random()*10-5);
-      el.style.left = `calc(${lanePct}% + ${jitter}px)`;
-      el.style.transform = 'translateX(-50%)';
+      const jitter = (Math.random()*4-2);
+      el.style.left = (cumX + jitter) + 'px';
+      el.style.transform = 'none';
       el.style.top = '-46px';
-      sky.appendChild(el);
+      cumX += el.offsetWidth + GAP_W;
     }
     G.currentRoundEls.push(el);
 
@@ -990,6 +1018,24 @@ function showToast(correct){
   setTimeout(()=>{ if(slot) slot.innerHTML=''; }, NEXT_DELAY_MS);
 }
 
+function showPileFullBanner(){
+  if(document.getElementById('pileFullBanner')) return; // вже показаний
+  const el = document.createElement('div');
+  el.id = 'pileFullBanner';
+  el.className = 'pile-full-banner';
+  el.innerHTML = `
+    <b>⚠️ ${t('pileFullTitle')}</b>
+    <span>${t('pileFullMsg')}</span>
+    <div class="pile-full-actions">
+      <button class="pile-full-continue">${t('continueBtn')}</button>
+      <button class="pile-full-finish">${t('finishBtn')}</button>
+    </div>
+  `;
+  el.querySelector('.pile-full-continue').onclick = ()=>{ el.remove(); resumeGame(); };
+  el.querySelector('.pile-full-finish').onclick = ()=> goStart();
+  document.body.appendChild(el);
+}
+
 function settleIntoPile(settleEl, item){
   if(!settleEl || !settleEl.parentNode || settleEl.classList.contains('settled')) return;
   const sky = document.getElementById('sky');
@@ -997,7 +1043,10 @@ function settleIntoPile(settleEl, item){
   freezeTop(settleEl, sky);
   const rot = (Math.random()*14-7).toFixed(1);
   settleEl.classList.add('settled');
-  settleEl.onclick = ()=> openInfoModal(item);
+  settleEl.onclick = null;
+  // невеликий захист від "подвійного кліку" на мобільних (тач + синтетичний клік одразу після):
+  // обробник для перегляду пояснення вмикаємо трохи пізніше, вже після приземлення в купу
+  setTimeout(()=>{ settleEl.onclick = ()=> openInfoModal(item); }, 400);
   requestAnimationFrame(()=>{
     // FLIP: запам'ятовуємо поточну позицію відносно sky, переносимо у flex-купу,
     // і плавно анімуємо різницю — так браузер сам розкладає купу без накладань
@@ -1012,6 +1061,13 @@ function settleIntoPile(settleEl, item){
     settleEl.style.top = '';
     settleEl.style.transform = `rotate(${rot}deg)`;
     pileWrap.appendChild(settleEl);
+    // купа не має рости нескінченно — інакше заповзає в зону, де падають нові слова;
+    // замість тихого видалення старих помилок — примусова пауза, щоб їх переглянули
+    const MAX_PILE = 16;
+    if(pileWrap.children.length >= MAX_PILE){
+      pauseGame();
+      showPileFullBanner();
+    }
 
     const afterRect = settleEl.getBoundingClientRect();
     const afterX = afterRect.left - skyRect.left;
@@ -1075,11 +1131,12 @@ function resolveMega(correct, clickedEl, item, timedOut){
 }
 
 function openInfoModal(item){
+  const wasPaused = PAUSED; // якщо пауза вже була активна (напр. купа заповнена) — не знімаємо її при закритті
   pauseGame();
   const headline = item.type === 'label' ? itemTenseLabel(item) : item.correct;
   const root = document.createElement('div');
   root.className = 'modal-backdrop';
-  const closeIt = ()=>{ resumeGame(); root.remove(); };
+  const closeIt = ()=>{ if(!wasPaused) resumeGame(); root.remove(); };
   root.onclick = (e)=>{ if(e.target === root) closeIt(); };
   root.innerHTML = `
     <div class="modal-card">
@@ -1107,6 +1164,8 @@ function resumeGame(){
   if(!PAUSED) return;
   PAUSED = false;
   updatePauseBtn();
+  const banner = document.getElementById('pileFullBanner');
+  if(banner) banner.remove();
   const sky = document.getElementById('sky');
   if(!sky) return;
   const skyH = sky.clientHeight || 340;
